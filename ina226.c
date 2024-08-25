@@ -10,17 +10,19 @@
 
 #define INA226_ADDRESS 0x40
 #define PWR_CALC_VOLTAGE 5
+#define SHUNT_OHM_VALUE 0.01
+#define MAX_AMP_POSSIBLE 4
 
 int fd;
 uint64_t config;
 float current_lsb;
 
-static uint16_t read16(int fd, uint8_t ad){
+uint16_t read16(int fd, uint8_t ad){
 	uint16_t result = wiringPiI2CReadReg16(fd,ad);
 	return  (result<<8) | (result>>8);
 }
 
-static void write16(int fd, uint8_t ad, uint16_t value){
+void write16(int fd, uint8_t ad, uint16_t value){
 	wiringPiI2CWriteReg16(fd,ad,(value<<8)|(value>>8));
 }
 
@@ -70,11 +72,13 @@ void ina226_read(float *voltage, float *current, float *power, float* shunt_volt
 	if (voltage) {
 		uint16_t voltage_reg = read16(fd,INA226_REG_BUS_VOLTAGE);
 		*voltage = (float) voltage_reg * 1.25e-3;
+        //printf("setup_ina226 returned fd: %f\n", *voltage);
 	}
 
 	if (current) {
 		int16_t current_reg = (int16_t) read16(fd,INA226_REG_CURRENT);
 		*current = (float) current_reg * 1000.0 * current_lsb;
+        //printf("setup_ina226 returned fd: %f\n", *current);
 	}
 
 	if (power) {
@@ -113,13 +117,13 @@ void show_usage(const char *prog_name) {
 
 
 int setup_ina226() {
-    int fd = wiringPiI2CSetup(INA226_ADDRESS);
+    fd = wiringPiI2CSetup(INA226_ADDRESS);
     if (fd < 0) {
         printf("Error: INA226 device not found.\n");
         return -1;
-    }
+    } 
 
-    ina226_calibrate(0.01, 4);
+    ina226_calibrate(SHUNT_OHM_VALUE, MAX_AMP_POSSIBLE);
     ina226_configure(INA226_TIME_8MS, INA226_TIME_8MS, INA226_AVERAGES_16, INA226_MODE_SHUNT_BUS_CONTINUOUS);
 
     return fd;  
@@ -167,6 +171,12 @@ int main(int argc, char* argv[]) {
     char *sql_file = NULL;
     int show_power = 0, show_current = 0, show_voltage = 0, show_all = 0, show_shunt = 0;
 
+    //If no arguments are passed
+    if (argc == 1) {
+        show_usage(argv[0]);
+        return 0;
+    }
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0) {
             show_usage(argv[0]);
@@ -177,7 +187,7 @@ int main(int argc, char* argv[]) {
             show_current = 1;
         } else if (strcmp(argv[i], "-v") == 0) {
             show_voltage = 1;
-		} else if (strcmp(argv[i], "-s") == 0) {
+        } else if (strcmp(argv[i], "-s") == 0) {
             show_shunt = 1;
         } else if (strcmp(argv[i], "-a") == 0) {
             show_all = 1;
@@ -196,21 +206,25 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (show_power || show_current || show_voltage || show_shunt || show_all || sql_file) {
-        fd = setup_ina226();
-        if (fd < 0) return -1;
-    }
 
+
+
+    // Setup the INA226 sensor if any data is requested
+    if (show_power || show_current || show_voltage || show_shunt || show_all || sql_file) {
+        setup_ina226();
+    
+    }
+   
+
+    // Handle the case where -a is specified
     if (show_all) {
         show_power = show_current = show_voltage = show_shunt = 1;
-
     }
 
+    // Log values to SQL file if specified, otherwise display values
     if (sql_file) {
-        setup_ina226();
         log_values_to_sql(sql_file);
     } else {
-        setup_ina226();
         read_and_display_values(show_power, show_current, show_voltage, show_shunt);
     }
 
