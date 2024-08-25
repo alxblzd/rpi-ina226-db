@@ -2,6 +2,8 @@
 
 This project utilizes the INA226 sensor to monitor power consumption and lithium-ion battery voltage in a Raspberry Pi 4B setup. The data collected will be connected to a database to generate basic charts.
 
+based on this github repository : https://github.com/MarioAriasGa/raspberry-pi-ina226
+
 ## Available Options
 
 - `-h`           Show this help message and exit.
