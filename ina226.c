@@ -6,21 +6,21 @@
 #include <unistd.h>
 #include <wiringPiI2C.h>
 #include "ina226.h"
+#include <string.h>
 
 #define INA226_ADDRESS 0x40
+#define PWR_CALC_VOLTAGE 5
 
 int fd;
 uint64_t config;
 float current_lsb;
 
-uint16_t read16(int fd, uint8_t ad){
+static uint16_t read16(int fd, uint8_t ad){
 	uint16_t result = wiringPiI2CReadReg16(fd,ad);
-	// Chip uses different endian
 	return  (result<<8) | (result>>8);
 }
 
-void write16(int fd, uint8_t ad, uint16_t value){
-	// Chip uses different endian
+static void write16(int fd, uint8_t ad, uint16_t value){
 	wiringPiI2CWriteReg16(fd,ad,(value<<8)|(value>>8));
 }
 
@@ -45,7 +45,7 @@ void ina226_configure(uint8_t bus, uint8_t shunt, uint8_t average, uint8_t mode)
 	write16(fd,INA226_REG_CONFIGURATION, config);
 }
 
-uint16_t ina226_conversion_ready()
+static uint16_t ina226_conversion_ready()
 {
 	return read16(fd,INA226_REG_MASK_ENABLE) & INA226_MASK_ENABLE_CVRF;
 }
@@ -57,13 +57,12 @@ void ina226_wait(){
 
 	uint32_t total_wait = (wait[bus] + wait[shunt] + (average ? avgwaits[bus>shunt ? bus : shunt] : 0)) * averages[average];
 
-	usleep(total_wait+1000);
+	usleep(total_wait);
 
 	int count=0;
 	while(!ina226_conversion_ready()){
 		count++;
 	}
-	//printf("%d\n",count);
 }
 
 void ina226_read(float *voltage, float *current, float *power, float* shunt_voltage)
@@ -99,47 +98,121 @@ inline void ina226_disable()
 	write16(fd, INA226_REG_CONFIGURATION, config = INA226_MODE_OFF);
 }
 
-int main() {
-	float voltage,current,power,shunt,power_est;
-	time_t rawtime;
-	char buffer[80];
-	int trig=1;
+void show_usage(const char *prog_name) {
+    printf("Usage: %s [OPTIONS]\n", prog_name);
+    printf("This program reads values from an INA226 module on an I2C bus. The power value doesnt come from the Module\n");
+    printf("Available options:\n");
+    printf("  -h           Show this help message and exit.\n");
+    printf("  -p           Display the power value.\n");
+    printf("  -c           Display the current value.\n");
+    printf("  -v           Display the Li-Ion battery voltage.\n");
+	printf("  -s           Display the shunt voltage.\n");
+    printf("  -a           Display all available values (power, current, voltage).\n");
+    printf("  -sql <file>  Use an SQLite database for data storage. Specify the database file path.\n");
+}
 
-	fd = wiringPiI2CSetup(INA226_ADDRESS);
-	if(fd < 0) {
-		printf("Device not found");
-		return -1;
-	}
 
-	//printf("Manufacturer 0x%X Chip 0x%X\n",read16(fd,INA226_REG_MANUFACTURER),read16(fd,INA226_REG_DIE_ID));
+int setup_ina226() {
+    int fd = wiringPiI2CSetup(INA226_ADDRESS);
+    if (fd < 0) {
+        printf("Error: INA226 device not found.\n");
+        return -1;
+    }
 
-	// Shunt resistor (Ohm), Max Current (Amp)
-	ina226_calibrate(0.01, 4);
+    ina226_calibrate(0.01, 4);
+    ina226_configure(INA226_TIME_8MS, INA226_TIME_8MS, INA226_AVERAGES_16, INA226_MODE_SHUNT_BUS_CONTINUOUS);
 
-	// Header
+    return fd;  
+}
 
-	// BUS / SHUNT / Averages / Mode
-	ina226_configure(INA226_TIME_8MS, INA226_TIME_8MS, INA226_AVERAGES_16, INA226_MODE_SHUNT_BUS_CONTINUOUS);
+void read_and_display_values(int show_power, int show_current, int show_voltage, int show_shunt) {
+    float voltage, current, power, shunt;
+    ina226_read(&voltage, &current, &power, &shunt);
+    
+    if (show_power) {
+        printf("%.3f mW\n", current * PWR_CALC_VOLTAGE);
+    }
+    if (show_current) {
+        printf("%.3f mA\n", current);
+    }
+    if (show_voltage) {
+        printf("%.3f V\n", voltage);
+    }
+	if (show_shunt) {
+        printf("%.3f mV\n", shunt);
+    }
+}
 
-	for(;;){
-		//ina226_configure(INA226_TIME_8MS, INA226_TIME_8MS, INA226_AVERAGES_16, INA226_MODE_SHUNT_BUS_TRIGGERED);
-		//ina226_wait();
+void log_values_to_sql(const char *sql_file) {
+    float voltage, current, power, shunt;
+    char buffer[80];
+    time_t rawtime;
+    
+    for (;;) {
+		    
+        ina226_wait(); 
+        ina226_read(&voltage, &current, &power, &shunt);
 
-		// Read
-		ina226_read(&voltage, &current, &power, &shunt);
+        time(&rawtime);
+        struct tm *info = localtime(&rawtime);
+        strftime(buffer, 80, "%Y-%m-%d,%H:%M:%S", info);
 
-		// Timestamp / Date
-		time(&rawtime);
-		struct tm *info = localtime( &rawtime );
-		strftime(buffer,80,"%Y-%m-%d,%H:%M:%S", info);
-		power_est=current*5;
-		printf("%s,%d,%.3f,%.3f,%.3f,%.3f\n",buffer,(int)rawtime,voltage,current,power_est,shunt);
-		fflush(NULL);
+        printf("%s,%d,%.3f,%.2f,%.0f,%.0f\n", buffer, (int)rawtime, voltage, current, current * PWR_CALC_VOLTAGE, shunt);
 
-		usleep(1000000);
-	}
+        usleep(1000000);
+    }
+}
 
-	ina226_disable();
+int main(int argc, char* argv[]) {
+    char *sql_file = NULL;
+    int show_power = 0, show_current = 0, show_voltage = 0, show_all = 0, show_shunt = 0;
 
-	return 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0) {
+            show_usage(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "-p") == 0) {
+            show_power = 1;
+        } else if (strcmp(argv[i], "-c") == 0) {
+            show_current = 1;
+        } else if (strcmp(argv[i], "-v") == 0) {
+            show_voltage = 1;
+		} else if (strcmp(argv[i], "-s") == 0) {
+            show_shunt = 1;
+        } else if (strcmp(argv[i], "-a") == 0) {
+            show_all = 1;
+        } else if (strcmp(argv[i], "-sql") == 0) {
+            if (i + 1 < argc) {
+                sql_file = argv[++i];
+            } else {
+                fprintf(stderr, "Error: Missing argument for -sql option.\n");
+                show_usage(argv[0]);
+                return -1;
+            }
+        } else {
+            fprintf(stderr, "Error: Unknown option '%s'.\n", argv[i]);
+            show_usage(argv[0]);
+            return -1;
+        }
+    }
+
+    if (show_power || show_current || show_voltage || show_shunt || show_all || sql_file) {
+        fd = setup_ina226();
+        if (fd < 0) return -1;
+    }
+
+    if (show_all) {
+        show_power = show_current = show_voltage = show_shunt = 1;
+
+    }
+
+    if (sql_file) {
+        setup_ina226();
+        log_values_to_sql(sql_file);
+    } else {
+        setup_ina226();
+        read_and_display_values(show_power, show_current, show_voltage, show_shunt);
+    }
+
+    return 0;
 }
