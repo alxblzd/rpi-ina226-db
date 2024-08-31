@@ -16,7 +16,7 @@ based on this github repository : https://github.com/MarioAriasGa/raspberry-pi-i
 
 ## SQLite Implementation
 
-The SQLite implementation is still in progress.
+The SQLite is working but still in progress, I need to make the databse more resilient for time serie, 2 tables, 2 differrent primary key then join them together if I need to read data for a specific datetime
 
 ## Power Calculation Details
 
@@ -36,3 +36,4 @@ This value can be set manually in the ina226.c file with the #define PWR_CALC_VO
 
 ## dependencies :
 - libsqlite3-dev
+- and more to precises
