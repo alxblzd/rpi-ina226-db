@@ -31,3 +31,8 @@ This value can be set manually in the ina226.c file with the #define PWR_CALC_VO
 
 ```c
 #define PWR_CALC_VOLTAGE 5
+
+
+
+## dependencies :
+- libsqlite3-dev

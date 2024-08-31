@@ -7,9 +7,10 @@
 #include <wiringPiI2C.h>
 #include "ina226.h"
 #include <string.h>
+#include <sqlite3.h>
 
 #define INA226_ADDRESS 0x40
-#define PWR_CALC_VOLTAGE 5
+#define PWR_CALC_VOLTAGE 5 //fixed value for power calculation
 #define SHUNT_OHM_VALUE 0.01
 #define MAX_AMP_POSSIBLE 4
 
@@ -26,7 +27,6 @@ void write16(int fd, uint8_t ad, uint16_t value){
 	wiringPiI2CWriteReg16(fd,ad,(value<<8)|(value>>8));
 }
 
-// R of shunt resistor in ohm. Max current in Amp
 void ina226_calibrate(float r_shunt, float max_current)
 {
 	current_lsb = max_current / (1 << 15);
@@ -92,12 +92,12 @@ void ina226_read(float *voltage, float *current, float *power, float* shunt_volt
 	}
 }
 
-inline void ina226_reset()
+void ina226_reset()
 {
 	write16(fd, INA226_REG_CONFIGURATION, config = INA226_RESET);
 }
 
-inline void ina226_disable()
+void ina226_disable()
 {
 	write16(fd, INA226_REG_CONFIGURATION, config = INA226_MODE_OFF);
 }
@@ -147,36 +147,73 @@ void read_and_display_values(int show_power, int show_current, int show_voltage,
     }
 }
 
-void log_values_to_sql(const char *sql_file) {
+void log_values_to_sql(const char *sql_file, int num_iterations, int delay) {
     float voltage, current, power, shunt;
     char buffer[80];
     time_t rawtime;
-    
-    for (;;) {
-		    
+    int rc;
+    char *err_msg = 0;
+    sqlite3 *db;
+    char sql_insert_data[256];  // Buffer to hold dynamic SQL queries
+
+    rc = sqlite3_open(sql_file, &db);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return;
+    }
+
+    const char *sql_create_table = "CREATE TABLE IF NOT EXISTS SensorData(Timestamp INT, Voltage REAL, Current REAL, Power REAL, Shunt REAL);";
+
+    rc = sqlite3_exec(db, sql_create_table, 0, 0, &err_msg);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "SQL error: %s\n", err_msg);
+        sqlite3_free(err_msg);
+        sqlite3_close(db);
+        return;
+    }
+
+    for (int i = 0; i < num_iterations; i++) {
         ina226_wait(); 
         ina226_read(&voltage, &current, &power, &shunt);
 
+        // Get current time
         time(&rawtime);
         struct tm *info = localtime(&rawtime);
         strftime(buffer, 80, "%Y-%m-%d,%H:%M:%S", info);
 
         printf("%s,%d,%.3f,%.2f,%.0f,%.0f\n", buffer, (int)rawtime, voltage, current, current * PWR_CALC_VOLTAGE, shunt);
 
-        usleep(1000000);
+        snprintf(sql_insert_data, sizeof(sql_insert_data),
+                 "INSERT INTO SensorData (Timestamp, Voltage, Current, Power, Shunt) VALUES (%d, %.3f, %.2f, %.0f, %.0f);",
+                 (int)rawtime, voltage, current, power, shunt);
+
+        rc = sqlite3_exec(db, sql_insert_data, 0, 0, &err_msg);
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "SQL error: %s\n", err_msg);
+            sqlite3_free(err_msg);
+            break;  // Exit the loop on error
+        }
+
+        if (delay > 0) {
+            sleep(delay);  
+        }
     }
+
+    sqlite3_close(db);
 }
 
 int main(int argc, char* argv[]) {
     char *sql_file = NULL;
     int show_power = 0, show_current = 0, show_voltage = 0, show_all = 0, show_shunt = 0;
+    int num_iterations = 1; 
+    int delay = 0;           
 
-    //If no arguments are passed
+
     if (argc == 1) {
         show_usage(argv[0]);
         return 0;
     }
-
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0) {
             show_usage(argv[0]);
@@ -199,6 +236,22 @@ int main(int argc, char* argv[]) {
                 show_usage(argv[0]);
                 return -1;
             }
+        } else if (strcmp(argv[i], "-n") == 0) {
+            if (i + 1 < argc) {
+                num_iterations = atoi(argv[++i]);  // Convert string to integer
+            } else {
+                fprintf(stderr, "Error: Missing argument for -n option.\n");
+                show_usage(argv[0]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "-t") == 0) {
+            if (i + 1 < argc) {
+                delay = atoi(argv[++i]);  // Convert string to integer
+            } else {
+                fprintf(stderr, "Error: Missing argument for -t option.\n");
+                show_usage(argv[0]);
+                return -1;
+            }
         } else {
             fprintf(stderr, "Error: Unknown option '%s'.\n", argv[i]);
             show_usage(argv[0]);
@@ -206,26 +259,25 @@ int main(int argc, char* argv[]) {
         }
     }
 
-
-
-
-    // Setup the INA226 sensor if any data is requested
     if (show_power || show_current || show_voltage || show_shunt || show_all || sql_file) {
         setup_ina226();
-    
     }
    
-
-    // Handle the case where -a is specified
     if (show_all) {
         show_power = show_current = show_voltage = show_shunt = 1;
     }
 
-    // Log values to SQL file if specified, otherwise display values
+
     if (sql_file) {
-        log_values_to_sql(sql_file);
+        ina226_wait();
+        log_values_to_sql(sql_file, num_iterations, delay);
     } else {
+        ina226_wait(); // Ensure conversion is complete inside the ina module
+
         read_and_display_values(show_power, show_current, show_voltage, show_shunt);
+        //ina226_reset();
+        //ina226_disable();  
+
     }
 
     return 0;
