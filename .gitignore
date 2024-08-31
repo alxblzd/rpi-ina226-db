@@ -1,0 +1,18 @@
+# Compiled files
+ina226
+*.o
+*.a
+*.so
+
+# Backup and temporary files
+*.bak
+*.tmp
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# Database files
+*.db
+

@@ -112,7 +112,7 @@ void show_usage(const char *prog_name) {
     printf("  -v           Display the Li-Ion battery voltage.\n");
 	printf("  -s           Display the shunt voltage.\n");
     printf("  -a           Display all available values (power, current, voltage).\n");
-    printf("  -sql <file>  Use an SQLite database for data storage. Specify the database file path.\n");
+    printf("  -sql <file> -t <delay> -n <iteration> Use an SQLite database for data storage. Specify the database file path.\n");
 }
 
 
@@ -154,7 +154,6 @@ void log_values_to_sql(const char *sql_file, int num_iterations, int delay) {
     int rc;
     char *err_msg = 0;
     sqlite3 *db;
-    char sql_insert_data[256];  // Buffer to hold dynamic SQL queries
 
     rc = sqlite3_open(sql_file, &db);
     if (rc != SQLITE_OK) {
@@ -164,7 +163,6 @@ void log_values_to_sql(const char *sql_file, int num_iterations, int delay) {
     }
 
     const char *sql_create_table = "CREATE TABLE IF NOT EXISTS SensorData(Timestamp INT, Voltage REAL, Current REAL, Power REAL, Shunt REAL);";
-
     rc = sqlite3_exec(db, sql_create_table, 0, 0, &err_msg);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "SQL error: %s\n", err_msg);
@@ -173,14 +171,16 @@ void log_values_to_sql(const char *sql_file, int num_iterations, int delay) {
         return;
     }
 
-    for (int i = 0; i < num_iterations; i++) {
-        ina226_wait(); 
+    char sql_insert_data[256];
+    int i = 0;
+
+    while (num_iterations == -1 || i < num_iterations) {
+        ina226_wait();
         ina226_read(&voltage, &current, &power, &shunt);
 
-        // Get current time
         time(&rawtime);
-        struct tm *info = localtime(&rawtime);
-        strftime(buffer, 80, "%Y-%m-%d,%H:%M:%S", info);
+        struct tm *timeinfo = localtime(&rawtime);
+        strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
 
         printf("%s,%d,%.3f,%.2f,%.0f,%.0f\n", buffer, (int)rawtime, voltage, current, current * PWR_CALC_VOLTAGE, shunt);
 
@@ -192,16 +192,21 @@ void log_values_to_sql(const char *sql_file, int num_iterations, int delay) {
         if (rc != SQLITE_OK) {
             fprintf(stderr, "SQL error: %s\n", err_msg);
             sqlite3_free(err_msg);
-            break;  // Exit the loop on error
+            break;
         }
 
         if (delay > 0) {
-            sleep(delay);  
+            sleep(delay);
+        }
+
+        if (num_iterations != -1) {
+            i++;
         }
     }
 
     sqlite3_close(db);
 }
+
 
 int main(int argc, char* argv[]) {
     char *sql_file = NULL;

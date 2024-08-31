@@ -12,7 +12,7 @@ based on this github repository : https://github.com/MarioAriasGa/raspberry-pi-i
 - `-v`           Display the Li-Ion battery voltage.
 - `-s`           Display the shunt voltage.
 - `-a`           Display all available values (power, current, voltage).
-- `-sql <file>`  Use an SQLite database for data storage. Specify the database file path.
+- `-sql <file> -t <delay> -n <iteration>`  Use an SQLite database for data storage. Specify the database file path.
 
 ## SQLite Implementation
 
@@ -30,8 +30,11 @@ This value can be set manually in the ina226.c file with the #define PWR_CALC_VO
 
 
 ```c
-#define PWR_CALC_VOLTAGE 5
-
+#define INA226_ADDRESS 0x40 // I2C address
+#define PWR_CALC_VOLTAGE 5 //fixed value for power calculation
+#define SHUNT_OHM_VALUE 0.01 
+#define MAX_AMP_POSSIBLE 4 // Max amp to measure on your circuit, used for calibration
+```
 
 
 ## dependencies :
